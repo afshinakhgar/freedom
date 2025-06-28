@@ -3,11 +3,9 @@
 set -e
 
 XRAY_DIR="/opt/xray"
-UUID=$(uuidgen)
 VLESS_PORT=2096
 VMESS_PORT=2087
 TROJAN_PORT=8443
-TROJAN_PASS="$(openssl rand -hex 8)"
 
 mkdir -p $XRAY_DIR
 apt update && apt install -y unzip curl
@@ -27,6 +25,8 @@ touch /var/log/xray/access.log /var/log/xray/error.log
 chmod 644 /var/log/xray/*.log
 
 if [[ "$ROLE" == "2" ]]; then
+  UUID=$(uuidgen)
+  TROJAN_PASS="$(openssl rand -hex 8)"
   echo "🔧 Setting up SERVER config..."
   cat > $XRAY_DIR/config.json <<EOF
 {
@@ -76,6 +76,8 @@ EOF
 
 else
   read -rp "Enter OUTSIDE SERVER IP: " SERVER_IP
+  read -rp "Enter UUID (from SERVER): " UUID
+  read -rp "Enter Trojan password (from SERVER): " TROJAN_PASS
   echo "🔧 Setting up CLIENT config..."
   cat > $XRAY_DIR/config.json <<EOF
 {
@@ -177,6 +179,7 @@ if [[ "$ROLE" == "2" ]]; then
   echo "vless://$UUID@$SERVER_REAL_IP:$VLESS_PORT?encryption=none&security=none&type=tcp#IranAzad"
   echo "vmess://$(echo -n "{\"v\":\"2\",\"ps\":\"IranAzad\",\"add\":\"$SERVER_REAL_IP\",\"port\":\"$VMESS_PORT\",\"id\":\"$UUID\",\"aid\":\"0\",\"net\":\"tcp\",\"type\":\"none\",\"host\":\"\",\"path\":\"\",\"tls\":\"\"}" | base64 -w 0)"
   echo "trojan://$TROJAN_PASS@$SERVER_REAL_IP:$TROJAN_PORT#IranAzad"
+  
 else
   echo "✅ On CLIENT: configure your apps to use SOCKS5 127.0.0.1:1080 or HTTP 127.0.0.1:1081."
 fi
