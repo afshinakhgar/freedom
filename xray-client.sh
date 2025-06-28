@@ -2,48 +2,50 @@
 
 set -e
 
-apt update && apt install -y jq
+if ! command -v jq &>/dev/null; then
+  apt update && apt install -y jq
+fi
 
-XRAY_CONFIG="/opt/xray/config.json"
+read -rp "📝 Enter SERVER IP: " SERVER_IP
 
-read -rp "📝 Enter OUTSIDE SERVER IP: " SERVER_IP
-# Trim invalid or non-printable characters and spaces
-SERVER_IP=$(echo "$SERVER_IP" | tr -cd '[:print:]' | sed 's/^[ \t]*//;s/[ \t]*$//')
-echo "🔎 Using Server IP: $SERVER_IP"
-
-if [[ ! -f "$XRAY_CONFIG" ]]; then
-  echo "❌ Config file not found at $XRAY_CONFIG"
+CONFIG="/opt/xray/config.json"
+if [[ ! -f "$CONFIG" ]]; then
+  echo "❌ Config file not found at $CONFIG"
   exit 1
 fi
 
-echo "🔎 Found config file: $XRAY_CONFIG"
+echo "🔎 Reading config from $CONFIG..."
 
-# Extract UUID from vless outbound
-UUID=$(jq -r '.outbounds[] | select(.protocol=="vless") | .settings.vnext[0].users[0].id' "$XRAY_CONFIG")
+UUID=$(jq -r '.inbounds[0].settings.clients[0].id' $CONFIG)
+TROJAN_PASS=$(jq -r '.inbounds[2].settings.clients[0].password // .inbounds[2].settings.clients[0].password' $CONFIG)
+VLESS_PORT=$(jq -r '.inbounds[0].port' $CONFIG)
+VMESS_PORT=$(jq -r '.inbounds[1].port' $CONFIG)
+TROJAN_PORT=$(jq -r '.inbounds[2].port' $CONFIG)
 
-# Extract Trojan password
-TROJAN_PASS=$(jq -r '.outbounds[] | select(.protocol=="trojan") | .settings.servers[0].password' "$XRAY_CONFIG")
+if [[ -z "$UUID" || "$UUID" == "null" ]]; then
+  echo "❌ Could not find UUID in config."
+  exit 1
+fi
+
+if [[ -z "$TROJAN_PASS" || "$TROJAN_PASS" == "null" ]]; then
+  echo "❌ Could not find Trojan password in config."
+  exit 1
+fi
 
 echo ""
-echo "✅ Here are your clients:"
-echo "Your UUID: $UUID"
-echo "Your Trojan Password: $TROJAN_PASS"
+echo "✅ Your clients:"
+echo "UUID: $UUID"
+echo "Trojan Password: $TROJAN_PASS"
 echo ""
-
 echo "🔗 VLESS:"
-echo "vless://$UUID@$SERVER_IP:2096?encryption=none&security=none&type=tcp#IranAzad"
-
+echo "vless://$UUID@$SERVER_IP:$VLESS_PORT?encryption=none&security=none&type=tcp#IranAzad"
 echo ""
 echo "🔗 VMess:"
 VMESS_JSON=$(cat <<EOF
-{"v":"2","ps":"IranAzad","add":"$SERVER_IP","port":"2087","id":"$UUID","aid":"0","net":"tcp","type":"none","host":"","path":"","tls":""}
+{"v":"2","ps":"IranAzad","add":"$SERVER_IP","port":"$VMESS_PORT","id":"$UUID","aid":"0","net":"tcp","type":"none","host":"","path":"","tls":""}
 EOF
 )
 echo "vmess://$(echo -n "$VMESS_JSON" | base64 -w 0)"
-
 echo ""
 echo "🔗 Trojan:"
-echo "trojan://$TROJAN_PASS@$SERVER_IP:8443#IranAzad"
-
-echo ""
-echo "✅ You can use these links in your client apps."
+echo "trojan://$TROJAN_PASS@$SERVER_IP:$TROJAN_PORT#IranAzad"
