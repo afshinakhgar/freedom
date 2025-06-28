@@ -107,10 +107,7 @@ else
             "address": "$SERVER_IP",
             "port": $VLESS_PORT,
             "users": [
-              {
-                "id": "$UUID",
-                "encryption": "none"
-              }
+              { "id": "$UUID", "encryption": "none" }
             ]
           }
         ]
@@ -125,9 +122,7 @@ else
             "address": "$SERVER_IP",
             "port": $VMESS_PORT,
             "users": [
-              {
-                "id": "$UUID"
-              }
+              { "id": "$UUID" }
             ]
           }
         ]
@@ -174,12 +169,22 @@ echo "✅ Xray install complete!"
 
 if [[ "$ROLE" == "2" ]]; then
   SERVER_REAL_IP=$(curl -s https://api.ipify.org || hostname -I | cut -d' ' -f1)
+  echo ""
   echo "Your UUID: $UUID"
   echo "Your Trojan Password: $TROJAN_PASS"
+  echo ""
+  echo "🔗 VLESS:"
   echo "vless://$UUID@$SERVER_REAL_IP:$VLESS_PORT?encryption=none&security=none&type=tcp#IranAzad"
-  echo "vmess://$(echo -n "{\"v\":\"2\",\"ps\":\"IranAzad\",\"add\":\"$SERVER_REAL_IP\",\"port\":\"$VMESS_PORT\",\"id\":\"$UUID\",\"aid\":\"0\",\"net\":\"tcp\",\"type\":\"none\",\"host\":\"\",\"path\":\"\",\"tls\":\"\"}" | base64 -w 0)"
+  echo ""
+  echo "🔗 VMess:"
+  VMESS_JSON=$(cat <<EOF
+{"v":"2","ps":"IranAzad","add":"$SERVER_REAL_IP","port":"$VMESS_PORT","id":"$UUID","aid":"0","net":"tcp","type":"none","host":"","path":"","tls":""}
+EOF
+)
+  echo "vmess://$(echo -n "$VMESS_JSON" | base64 -w 0)"
+  echo ""
+  echo "🔗 Trojan:"
   echo "trojan://$TROJAN_PASS@$SERVER_REAL_IP:$TROJAN_PORT#IranAzad"
-  
 else
   echo "✅ On CLIENT: configure your apps to use SOCKS5 127.0.0.1:1080 or HTTP 127.0.0.1:1081."
 fi
