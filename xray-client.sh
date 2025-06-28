@@ -2,7 +2,6 @@
 
 set -e
 
-# نصب jq در صورت نیاز
 if ! command -v jq &>/dev/null; then
   echo "📦 Installing jq..."
   apt update && apt install -y jq
