@@ -16,21 +16,25 @@ echo "2) Outside (Gateway)"
 read -rp "Choose 1 or 2: " ROLE
 
 cd "$XRAY_DIR"
-curl -Lo xray.zip https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip
-unzip -o xray.zip
-install -m 755 xray /usr/local/bin/xray
+
+# Install xray if not exists
+if [ ! -f /usr/local/bin/xray ]; then
+  curl -Lo xray.zip https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip
+  unzip -o xray.zip
+  install -m 755 xray /usr/local/bin/xray
+fi
 
 touch /var/log/xray/access.log /var/log/xray/error.log
 chmod 644 /var/log/xray/*.log
 
 if [[ "$ROLE" == "2" ]]; then
   ############################
-  # Outside (VLESS + WS)
+  # Outside (Gateway - WS)
   ############################
 
   UUID=$(uuidgen)
 
-  cat > config.json <<EOF
+  cat > "$XRAY_DIR/config.json" <<EOF
 {
   "log": {
     "access": "/var/log/xray/access.log",
@@ -43,7 +47,9 @@ if [[ "$ROLE" == "2" ]]; then
       "port": $VLESS_PORT,
       "protocol": "vless",
       "settings": {
-        "clients": [{ "id": "$UUID" }],
+        "clients": [
+          { "id": "$UUID" }
+        ],
         "decryption": "none"
       },
       "streamSettings": {
@@ -69,16 +75,17 @@ EOF
   echo "Port      : $VLESS_PORT"
   echo "WS Path   : $WS_PATH"
   echo "========================"
+  echo "👉 Save UUID for IRAN server"
 
 else
   ############################
-  # Iran (TCP → WS Relay)
+  # Iran (Relay - TCP → WS)
   ############################
 
   read -rp "Outside server IP: " OUTSIDE_IP
   read -rp "UUID (from outside): " UUID
 
-  cat > config.json <<EOF
+  cat > "$XRAY_DIR/config.json" <<EOF
 {
   "log": {
     "access": "/var/log/xray/access.log",
@@ -87,11 +94,14 @@ else
   },
   "inbounds": [
     {
+      "tag": "vless-in",
       "listen": "0.0.0.0",
       "port": $VLESS_PORT,
       "protocol": "vless",
       "settings": {
-        "clients": [{ "id": "$UUID" }],
+        "clients": [
+          { "id": "$UUID" }
+        ],
         "decryption": "none"
       },
       "streamSettings": {
@@ -101,6 +111,7 @@ else
   ],
   "outbounds": [
     {
+      "tag": "to-outside",
       "protocol": "vless",
       "settings": {
         "vnext": [
@@ -131,13 +142,15 @@ EOF
 
   echo ""
   echo "===== IRAN RELAY READY ====="
-  echo "VLESS (connect clients to IRAN):"
+  echo ""
+  echo "Use this VLESS link on clients:"
+  echo ""
   echo "vless://$UUID@$IRAN_IP:$VLESS_PORT?encryption=none&security=none&type=tcp#Iran-Relay"
   echo "============================"
 fi
 
 ############################
-# systemd
+# systemd service
 ############################
 
 cat > /etc/systemd/system/xray.service <<SERVICE
@@ -158,4 +171,6 @@ systemctl daemon-reload
 systemctl enable xray --now
 
 echo ""
-echo "Xray is running"
+echo "=============================="
+echo " Xray is running"
+echo "=============================="
