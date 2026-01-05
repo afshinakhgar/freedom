@@ -1,21 +1,18 @@
 #!/bin/bash
-
 set -e
 
 XRAY_DIR="/opt/xray"
 VLESS_PORT=2096
 VMESS_PORT=2087
-TROJAN_PORT=8443
 
-mkdir -p $XRAY_DIR
-apt update && apt install -y unzip curl
+mkdir -p $XRAY_DIR /var/log/xray
+apt update && apt install -y unzip curl uuid-runtime
 
-echo "🔧 Server role:"
-echo "1) 🇮🇷 Iran (Client Node)"
-echo "2) 🌍 Outside (Gateway Node)"
+echo "Server role:"
+echo "1) Iran (Client Node)"
+echo "2) Outside (Gateway Node)"
 read -rp "Choose 1 or 2: " ROLE
 
-echo "📥 Installing Xray..."
 cd $XRAY_DIR
 curl -Lo xray.zip https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip
 unzip -o xray.zip
@@ -26,8 +23,7 @@ chmod 644 /var/log/xray/*.log
 
 if [[ "$ROLE" == "2" ]]; then
   UUID=$(uuidgen)
-  TROJAN_PASS="$(openssl rand -hex 8)"
-  echo "🔧 Setting up SERVER config..."
+
   cat > $XRAY_DIR/config.json <<EOF
 {
   "log": {
@@ -40,9 +36,7 @@ if [[ "$ROLE" == "2" ]]; then
       "port": $VLESS_PORT,
       "protocol": "vless",
       "settings": {
-        "clients": [
-          { "id": "$UUID" }
-        ],
+        "clients": [{ "id": "$UUID" }],
         "decryption": "none"
       },
       "streamSettings": { "network": "tcp" }
@@ -51,34 +45,33 @@ if [[ "$ROLE" == "2" ]]; then
       "port": $VMESS_PORT,
       "protocol": "vmess",
       "settings": {
-        "clients": [
-          { "id": "$UUID" }
-        ]
-      },
-      "streamSettings": { "network": "tcp" }
-    },
-    {
-      "port": $TROJAN_PORT,
-      "protocol": "trojan",
-      "settings": {
-        "clients": [
-          { "password": "$TROJAN_PASS" }
-        ]
+        "clients": [{ "id": "$UUID" }]
       },
       "streamSettings": { "network": "tcp" }
     }
   ],
   "outbounds": [
-    { "protocol": "freedom", "settings": {} }
+    { "protocol": "freedom" }
   ]
 }
 EOF
 
+  SERVER_IP=$(curl -s https://api.ipify.org)
+
+  echo ""
+  echo "UUID: $UUID"
+  echo ""
+  echo "VLESS:"
+  echo "vless://$UUID@$SERVER_IP:$VLESS_PORT?encryption=none&security=none&type=tcp#Gateway"
+  echo ""
+  VMESS_JSON="{\"v\":\"2\",\"ps\":\"Gateway\",\"add\":\"$SERVER_IP\",\"port\":\"$VMESS_PORT\",\"id\":\"$UUID\",\"aid\":\"0\",\"net\":\"tcp\",\"type\":\"none\",\"host\":\"\",\"path\":\"\",\"tls\":\"\"}"
+  echo "VMess:"
+  echo "vmess://$(echo -n "$VMESS_JSON" | base64 -w 0)"
+
 else
-  read -rp "Enter OUTSIDE SERVER IP: " SERVER_IP
-  read -rp "Enter UUID (from SERVER): " UUID
-  read -rp "Enter Trojan password (from SERVER): " TROJAN_PASS
-  echo "🔧 Setting up CLIENT config..."
+  read -rp "Outside server IP: " SERVER_IP
+  read -rp "UUID: " UUID
+
   cat > $XRAY_DIR/config.json <<EOF
 {
   "log": {
@@ -94,97 +87,58 @@ else
     },
     {
       "port": 1081,
-      "protocol": "http",
-      "settings": {}
+      "protocol": "http"
     }
   ],
   "outbounds": [
     {
+      "tag": "vless-out",
       "protocol": "vless",
       "settings": {
-        "vnext": [
-          {
-            "address": "$SERVER_IP",
-            "port": $VLESS_PORT,
-            "users": [
-              { "id": "$UUID", "encryption": "none" }
-            ]
-          }
-        ]
-      },
-      "streamSettings": { "network": "tcp" }
+        "vnext": [{
+          "address": "$SERVER_IP",
+          "port": $VLESS_PORT,
+          "users": [{ "id": "$UUID", "encryption": "none" }]
+        }]
+      }
     },
     {
+      "tag": "vmess-out",
       "protocol": "vmess",
       "settings": {
-        "vnext": [
-          {
-            "address": "$SERVER_IP",
-            "port": $VMESS_PORT,
-            "users": [
-              { "id": "$UUID" }
-            ]
-          }
-        ]
-      },
-      "streamSettings": { "network": "tcp" }
-    },
-    {
-      "protocol": "trojan",
-      "settings": {
-        "servers": [
-          {
-            "address": "$SERVER_IP",
-            "port": $TROJAN_PORT,
-            "password": "$TROJAN_PASS"
-          }
-        ]
-      },
-      "streamSettings": { "network": "tcp" }
+        "vnext": [{
+          "address": "$SERVER_IP",
+          "port": $VMESS_PORT,
+          "users": [{ "id": "$UUID" }]
+        }]
+      }
     }
-  ]
+  ],
+  "routing": {
+    "rules": [
+      {
+        "type": "field",
+        "inboundTag": ["socks"],
+        "outboundTag": "vless-out"
+      }
+    ]
+  }
 }
 EOF
 fi
 
 cat > /etc/systemd/system/xray.service <<SERVICE
 [Unit]
-Description=Xray Service
 After=network.target
-
 [Service]
-ExecStart=/usr/local/bin/xray -config $XRAY_DIR/config.json
-Restart=on-failure
-
+ExecStart=/usr/local/bin/xray -c $XRAY_DIR/config.json
+Restart=always
+LimitNOFILE=1048576
 [Install]
 WantedBy=multi-user.target
 SERVICE
 
 systemctl daemon-reload
-systemctl enable xray
-systemctl restart xray
+systemctl enable xray --now
 
-echo ""
-echo "✅ Xray install complete!"
-
-if [[ "$ROLE" == "2" ]]; then
-  SERVER_REAL_IP=$(curl -s https://api.ipify.org || hostname -I | cut -d' ' -f1)
-  echo ""
-  echo "Your UUID: $UUID"
-  echo "Your Trojan Password: $TROJAN_PASS"
-  echo ""
-  echo "🔗 VLESS:"
-  echo "vless://$UUID@$SERVER_REAL_IP:$VLESS_PORT?encryption=none&security=none&type=tcp#IranAzad"
-  echo ""
-  echo "🔗 VMess:"
-  VMESS_JSON=$(cat <<EOF
-{"v":"2","ps":"IranAzad","add":"$SERVER_REAL_IP","port":"$VMESS_PORT","id":"$UUID","aid":"0","net":"tcp","type":"none","host":"","path":"","tls":""}
-EOF
-)
-  echo "vmess://$(echo -n "$VMESS_JSON" | base64 -w 0)"
-  echo ""
-  echo "🔗 Trojan:"
-  echo "trojan://$TROJAN_PASS@$SERVER_REAL_IP:$TROJAN_PORT#IranAzad"
-else
-  echo "✅ On CLIENT: configure your apps to use SOCKS5 127.0.0.1:1080 or HTTP 127.0.0.1:1081."
-fi
+echo "Xray is running"
