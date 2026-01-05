@@ -2,12 +2,12 @@
 set -e
 
 XRAY_DIR="/opt/xray"
-
-VLESS_PORT=2096
+VLESS_PORT=4433
 SOCKS_PORT=1080
 HTTP_PORT=1081
 
 mkdir -p "$XRAY_DIR" /var/log/xray
+
 apt update && apt install -y unzip curl uuid-runtime
 
 echo "=============================="
@@ -18,12 +18,14 @@ echo "2) Outside (Gateway)"
 read -rp "Choose 1 or 2: " ROLE
 
 cd "$XRAY_DIR"
-curl -Lo xray.zip https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip
-unzip -o xray.zip
-install -m 755 xray /usr/local/bin/xray
 
-touch /var/log/xray/access.log /var/log/xray/error.log
-chmod 644 /var/log/xray/*.log
+if [ ! -f xray ]; then
+  curl -Lo xray.zip https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip
+  unzip -o xray.zip
+  install -m 755 xray /usr/local/bin/xray
+fi
+
+UUID_FILE="$XRAY_DIR/uuid"
 
 if [[ "$ROLE" == "2" ]]; then
   ################################
@@ -31,23 +33,24 @@ if [[ "$ROLE" == "2" ]]; then
   ################################
 
   UUID=$(uuidgen)
+  echo "$UUID" > "$UUID_FILE"
 
   cat > "$XRAY_DIR/config.json" <<EOF
 {
   "log": { "loglevel": "warning" },
   "inbounds": [
     {
+      "listen": "0.0.0.0",
       "port": $VLESS_PORT,
       "protocol": "vless",
       "settings": {
         "clients": [{ "id": "$UUID" }],
         "decryption": "none"
-      }
+      },
+      "streamSettings": { "network": "tcp" }
     }
   ],
-  "outbounds": [
-    { "protocol": "freedom" }
-  ]
+  "outbounds": [{ "protocol": "freedom" }]
 }
 EOF
 
@@ -60,9 +63,9 @@ EOF
   echo ""
   echo "Server IP : $SERVER_IP"
   echo "UUID      : $UUID"
-  echo "VLESS Port: $VLESS_PORT"
+  echo "Port      : $VLESS_PORT"
   echo ""
-  echo "Save UUID and use it on IRAN server"
+  echo "Save UUID for Iran server"
 
 else
   ################################
@@ -79,12 +82,14 @@ else
   "inbounds": [
     {
       "tag": "vless-in",
+      "listen": "0.0.0.0",
       "port": $VLESS_PORT,
       "protocol": "vless",
       "settings": {
         "clients": [{ "id": "$UUID" }],
         "decryption": "none"
       },
+      "streamSettings": { "network": "tcp" },
       "sniffing": {
         "enabled": true,
         "destOverride": ["http","tls"]
@@ -92,12 +97,14 @@ else
     },
     {
       "tag": "socks-in",
+      "listen": "127.0.0.1",
       "port": $SOCKS_PORT,
       "protocol": "socks",
       "settings": { "udp": true }
     },
     {
       "tag": "http-in",
+      "listen": "127.0.0.1",
       "port": $HTTP_PORT,
       "protocol": "http"
     }
@@ -111,16 +118,10 @@ else
         "vnext": [{
           "address": "$OUTSIDE_IP",
           "port": $VLESS_PORT,
-          "users": [{
-            "id": "$UUID",
-            "encryption": "none"
-          }]
+          "users": [{ "id": "$UUID", "encryption": "none" }]
         }]
       },
-      "mux": {
-        "enabled": true,
-        "concurrency": 8
-      }
+      "streamSettings": { "network": "tcp" }
     }
   ],
 
@@ -128,11 +129,7 @@ else
     "rules": [
       {
         "type": "field",
-        "inboundTag": [
-          "vless-in",
-          "socks-in",
-          "http-in"
-        ],
+        "inboundTag": ["vless-in","socks-in","http-in"],
         "outboundTag": "to-outside"
       }
     ]
@@ -147,22 +144,15 @@ EOF
   echo " IRAN RELAY READY"
   echo "=============================="
   echo ""
-  echo "Server IP: $IRAN_IP"
-  echo ""
-  echo "----- VLESS (Mobile / v2rayN) -----"
+  echo "VLESS (Mobile / v2rayN):"
   echo "vless://$UUID@$IRAN_IP:$VLESS_PORT?encryption=none&security=none&type=tcp#Iran-Relay"
   echo ""
-  echo "----- SOCKS5 -----"
-  echo "Address: $IRAN_IP"
-  echo "Port   : $SOCKS_PORT"
-  echo ""
-  echo "----- HTTP Proxy -----"
-  echo "Address: $IRAN_IP"
-  echo "Port   : $HTTP_PORT"
+  echo "SOCKS5 (Local): 127.0.0.1:$SOCKS_PORT"
+  echo "HTTP  (Local): 127.0.0.1:$HTTP_PORT"
 fi
 
 ################################
-# systemd
+# systemd service
 ################################
 
 cat > /etc/systemd/system/xray.service <<SERVICE
@@ -171,7 +161,7 @@ Description=Xray Service
 After=network.target
 
 [Service]
-ExecStart=/usr/local/bin/xray -c $XRAY_DIR/config.json
+ExecStart=/usr/local/bin/xray -config $XRAY_DIR/config.json
 Restart=always
 LimitNOFILE=1048576
 
