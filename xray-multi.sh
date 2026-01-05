@@ -4,13 +4,11 @@ set -e
 XRAY_DIR="/opt/xray"
 
 VLESS_PORT=2096
-VMESS_PORT=2087
-TROJAN_PORT=8443
 SOCKS_PORT=1080
 HTTP_PORT=1081
 
 mkdir -p "$XRAY_DIR" /var/log/xray
-apt update && apt install -y unzip curl uuid-runtime openssl
+apt update && apt install -y unzip curl uuid-runtime
 
 echo "=============================="
 echo " Select server role"
@@ -27,13 +25,12 @@ install -m 755 xray /usr/local/bin/xray
 touch /var/log/xray/access.log /var/log/xray/error.log
 chmod 644 /var/log/xray/*.log
 
-UUID=$(uuidgen)
-TROJAN_PASS=$(openssl rand -hex 8)
-
 if [[ "$ROLE" == "2" ]]; then
   ################################
   # Outside (Gateway)
   ################################
+
+  UUID=$(uuidgen)
 
   cat > "$XRAY_DIR/config.json" <<EOF
 {
@@ -48,19 +45,24 @@ if [[ "$ROLE" == "2" ]]; then
       }
     }
   ],
-  "outbounds": [{ "protocol": "freedom" }]
+  "outbounds": [
+    { "protocol": "freedom" }
+  ]
 }
 EOF
+
+  SERVER_IP=$(curl -s https://api.ipify.org)
 
   echo ""
   echo "=============================="
   echo " OUTSIDE GATEWAY READY"
   echo "=============================="
   echo ""
-  echo "Save these values for IRAN server:"
-  echo ""
-  echo "UUID: $UUID"
+  echo "Server IP : $SERVER_IP"
+  echo "UUID      : $UUID"
   echo "VLESS Port: $VLESS_PORT"
+  echo ""
+  echo "Save UUID and use it on IRAN server"
 
 else
   ################################
@@ -72,11 +74,8 @@ else
 
   cat > "$XRAY_DIR/config.json" <<EOF
 {
-  "log": {
-    "access": "/var/log/xray/access.log",
-    "error": "/var/log/xray/error.log",
-    "loglevel": "warning"
-  },
+  "log": { "loglevel": "warning" },
+
   "inbounds": [
     {
       "tag": "vless-in",
@@ -85,22 +84,10 @@ else
       "settings": {
         "clients": [{ "id": "$UUID" }],
         "decryption": "none"
-      }
-    },
-    {
-      "tag": "vmess-in",
-      "port": $VMESS_PORT,
-      "protocol": "vmess",
-      "settings": {
-        "clients": [{ "id": "$UUID" }]
-      }
-    },
-    {
-      "tag": "trojan-in",
-      "port": $TROJAN_PORT,
-      "protocol": "trojan",
-      "settings": {
-        "clients": [{ "password": "$TROJAN_PASS" }]
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": ["http","tls"]
       }
     },
     {
@@ -115,6 +102,7 @@ else
       "protocol": "http"
     }
   ],
+
   "outbounds": [
     {
       "tag": "to-outside",
@@ -123,19 +111,25 @@ else
         "vnext": [{
           "address": "$OUTSIDE_IP",
           "port": $VLESS_PORT,
-          "users": [{ "id": "$UUID", "encryption": "none" }]
+          "users": [{
+            "id": "$UUID",
+            "encryption": "none"
+          }]
         }]
+      },
+      "mux": {
+        "enabled": true,
+        "concurrency": 8
       }
     }
   ],
+
   "routing": {
     "rules": [
       {
         "type": "field",
         "inboundTag": [
           "vless-in",
-          "vmess-in",
-          "trojan-in",
           "socks-in",
           "http-in"
         ],
@@ -150,28 +144,21 @@ EOF
 
   echo ""
   echo "=============================="
-  echo " IRAN RELAY READY (ALL CLIENTS)"
+  echo " IRAN RELAY READY"
   echo "=============================="
   echo ""
   echo "Server IP: $IRAN_IP"
   echo ""
-  echo "----- VLESS -----"
-  echo "vless://$UUID@$IRAN_IP:$VLESS_PORT?encryption=none&security=none&type=tcp#Iran-All"
-  echo ""
-  echo "----- VMess -----"
-  VMESS_JSON="{\"v\":\"2\",\"ps\":\"Iran-All\",\"add\":\"$IRAN_IP\",\"port\":\"$VMESS_PORT\",\"id\":\"$UUID\",\"aid\":\"0\",\"net\":\"tcp\",\"type\":\"none\",\"tls\":\"\"}"
-  echo "vmess://$(echo -n "$VMESS_JSON" | base64 -w 0)"
-  echo ""
-  echo "----- Trojan -----"
-  echo "trojan://$TROJAN_PASS@$IRAN_IP:$TROJAN_PORT#Iran-All"
+  echo "----- VLESS (Mobile / v2rayN) -----"
+  echo "vless://$UUID@$IRAN_IP:$VLESS_PORT?encryption=none&security=none&type=tcp#Iran-Relay"
   echo ""
   echo "----- SOCKS5 -----"
   echo "Address: $IRAN_IP"
-  echo "Port:    $SOCKS_PORT"
+  echo "Port   : $SOCKS_PORT"
   echo ""
   echo "----- HTTP Proxy -----"
   echo "Address: $IRAN_IP"
-  echo "Port:    $HTTP_PORT"
+  echo "Port   : $HTTP_PORT"
 fi
 
 ################################
