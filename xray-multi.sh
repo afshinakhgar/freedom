@@ -3,8 +3,7 @@ set -e
 
 XRAY_DIR="/opt/xray"
 VLESS_PORT=2096
-SOCKS_PORT=1080
-HTTP_PORT=1081
+WS_PATH="/"
 
 mkdir -p "$XRAY_DIR" /var/log/xray
 apt update && apt install -y unzip curl uuid-runtime
@@ -12,7 +11,7 @@ apt update && apt install -y unzip curl uuid-runtime
 echo "=============================="
 echo " Select server role"
 echo "=============================="
-echo "1) Iran (Relay + Clients)"
+echo "1) Iran (Relay)"
 echo "2) Outside (Gateway)"
 read -rp "Choose 1 or 2: " ROLE
 
@@ -21,13 +20,23 @@ curl -Lo xray.zip https://github.com/XTLS/Xray-core/releases/latest/download/Xra
 unzip -o xray.zip
 install -m 755 xray /usr/local/bin/xray
 
+touch /var/log/xray/access.log /var/log/xray/error.log
+chmod 644 /var/log/xray/*.log
+
 if [[ "$ROLE" == "2" ]]; then
-  # ===== Outside =====
+  ############################
+  # Outside (VLESS + WS)
+  ############################
+
   UUID=$(uuidgen)
 
   cat > config.json <<EOF
 {
-  "log": { "loglevel": "warning" },
+  "log": {
+    "access": "/var/log/xray/access.log",
+    "error": "/var/log/xray/error.log",
+    "loglevel": "warning"
+  },
   "inbounds": [
     {
       "listen": "0.0.0.0",
@@ -37,10 +46,17 @@ if [[ "$ROLE" == "2" ]]; then
         "clients": [{ "id": "$UUID" }],
         "decryption": "none"
       },
-      "streamSettings": { "network": "tcp" }
+      "streamSettings": {
+        "network": "ws",
+        "wsSettings": {
+          "path": "$WS_PATH"
+        }
+      }
     }
   ],
-  "outbounds": [{ "protocol": "freedom" }]
+  "outbounds": [
+    { "protocol": "freedom" }
+  ]
 }
 EOF
 
@@ -51,19 +67,26 @@ EOF
   echo "Server IP : $SERVER_IP"
   echo "UUID      : $UUID"
   echo "Port      : $VLESS_PORT"
+  echo "WS Path   : $WS_PATH"
   echo "========================"
 
 else
-  # ===== Iran =====
+  ############################
+  # Iran (TCP → WS Relay)
+  ############################
+
   read -rp "Outside server IP: " OUTSIDE_IP
   read -rp "UUID (from outside): " UUID
 
   cat > config.json <<EOF
 {
-  "log": { "loglevel": "warning" },
+  "log": {
+    "access": "/var/log/xray/access.log",
+    "error": "/var/log/xray/error.log",
+    "loglevel": "warning"
+  },
   "inbounds": [
     {
-      "tag": "vless-in",
       "listen": "0.0.0.0",
       "port": $VLESS_PORT,
       "protocol": "vless",
@@ -71,67 +94,62 @@ else
         "clients": [{ "id": "$UUID" }],
         "decryption": "none"
       },
-      "streamSettings": { "network": "tcp" }
-    },
-    {
-      "tag": "socks-in",
-      "listen": "127.0.0.1",
-      "port": $SOCKS_PORT,
-      "protocol": "socks",
-      "settings": { "udp": true }
-    },
-    {
-      "tag": "http-in",
-      "listen": "127.0.0.1",
-      "port": $HTTP_PORT,
-      "protocol": "http"
+      "streamSettings": {
+        "network": "tcp"
+      }
     }
   ],
   "outbounds": [
     {
-      "tag": "to-outside",
       "protocol": "vless",
       "settings": {
-        "vnext": [{
-          "address": "$OUTSIDE_IP",
-          "port": $VLESS_PORT,
-          "users": [{ "id": "$UUID", "encryption": "none" }]
-        }]
+        "vnext": [
+          {
+            "address": "$OUTSIDE_IP",
+            "port": $VLESS_PORT,
+            "users": [
+              {
+                "id": "$UUID",
+                "encryption": "none"
+              }
+            ]
+          }
+        ]
       },
-      "streamSettings": { "network": "tcp" }
-    }
-  ],
-  "routing": {
-    "rules": [
-      {
-        "type": "field",
-        "inboundTag": ["vless-in","socks-in","http-in"],
-        "outboundTag": "to-outside"
+      "streamSettings": {
+        "network": "ws",
+        "wsSettings": {
+          "path": "$WS_PATH"
+        }
       }
-    ]
-  }
+    }
+  ]
 }
 EOF
 
   IRAN_IP=$(curl -s https://api.ipify.org)
 
   echo ""
-  echo "===== IRAN READY ====="
-  echo "VLESS:"
+  echo "===== IRAN RELAY READY ====="
+  echo "VLESS (connect clients to IRAN):"
   echo "vless://$UUID@$IRAN_IP:$VLESS_PORT?encryption=none&security=none&type=tcp#Iran-Relay"
-  echo "SOCKS5: 127.0.0.1:$SOCKS_PORT"
-  echo "HTTP  : 127.0.0.1:$HTTP_PORT"
-  echo "====================="
+  echo "============================"
 fi
 
+############################
 # systemd
+############################
+
 cat > /etc/systemd/system/xray.service <<SERVICE
 [Unit]
+Description=Xray Service
 After=network.target
+
 [Service]
 ExecStart=/usr/local/bin/xray -config $XRAY_DIR/config.json
 Restart=always
 LimitNOFILE=1048576
+
 [Install]
 WantedBy=multi-user.target
 SERVICE
@@ -139,4 +157,5 @@ SERVICE
 systemctl daemon-reload
 systemctl enable xray --now
 
+echo ""
 echo "Xray is running"
